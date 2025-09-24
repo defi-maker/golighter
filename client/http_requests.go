@@ -25,7 +25,7 @@ func (c *HTTPClient) parseResultStatus(respBody []byte) error {
 	return nil
 }
 
-func (c *HTTPClient) getAndParseL2HTTPResponse(path string, params map[string]any, result interface{}) error {
+func (c *HTTPClient) getAndParseHTTPResponse(path string, params map[string]any, result interface{}, requireResult bool) error {
 	u, err := url.Parse(c.endpoint)
 	if err != nil {
 		return err
@@ -34,6 +34,9 @@ func (c *HTTPClient) getAndParseL2HTTPResponse(path string, params map[string]an
 
 	q := u.Query()
 	for k, v := range params {
+		if v == nil {
+			continue
+		}
 		q.Set(k, fmt.Sprintf("%v", v))
 	}
 	u.RawQuery = q.Encode()
@@ -50,13 +53,26 @@ func (c *HTTPClient) getAndParseL2HTTPResponse(path string, params map[string]an
 	if resp.StatusCode != http.StatusOK {
 		return errors.New(string(body))
 	}
-	if err = c.parseResultStatus(body); err != nil {
-		return err
+	if requireResult {
+		if err = c.parseResultStatus(body); err != nil {
+			return err
+		}
+	} else {
+		resultStatus := &ResultCode{}
+		if err := json.Unmarshal(body, resultStatus); err == nil {
+			if resultStatus.Code != 0 && resultStatus.Code != CodeOK {
+				return errors.New(resultStatus.Message)
+			}
+		}
 	}
 	if err := json.Unmarshal(body, result); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (c *HTTPClient) getAndParseL2HTTPResponse(path string, params map[string]any, result interface{}) error {
+	return c.getAndParseHTTPResponse(path, params, result, true)
 }
 
 func (c *HTTPClient) GetNextNonce(accountIndex int64, apiKeyIndex uint8) (int64, error) {
@@ -75,6 +91,34 @@ func (c *HTTPClient) GetApiKey(accountIndex int64, apiKeyIndex uint8) (*AccountA
 		return nil, err
 	}
 	return result, nil
+}
+
+func (c *HTTPClient) AckNotification(accountIndex int64, notifID string, auth *string) error {
+	data := url.Values{
+		"account_index": {strconv.FormatInt(accountIndex, 10)},
+		"notif_id":      {notifID},
+	}
+	if auth != nil {
+		data.Set("auth", *auth)
+	}
+	req, _ := http.NewRequest("POST", c.endpoint+"/api/v1/notification/ack", strings.NewReader(data.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return errors.New(string(body))
+	}
+	if err = c.parseResultStatus(body); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *HTTPClient) SendRawTx(tx txtypes.TxInfo) (string, error) {
@@ -177,6 +221,15 @@ func (c *HTTPClient) GetTransferFeeInfo(accountIndex, toAccountIndex int64, auth
 	return result, nil
 }
 
+func (c *HTTPClient) GetFastBridgeInfo() (*FastBridgeInfoResponse, error) {
+	result := &FastBridgeInfoResponse{}
+	err := c.getAndParseL2HTTPResponse("api/v1/fastbridge/info", map[string]any{}, result)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (c *HTTPClient) GetAccount(accountIndex int64) (*AccountResponse, error) {
 	result := &AccountResponse{}
 	err := c.getAndParseL2HTTPResponse("api/v1/account", map[string]any{
@@ -218,6 +271,19 @@ func (c *HTTPClient) GetOrderBookDetails(marketId uint8) (*OrderBookDetailsRespo
 		params["market_id"] = marketId
 	}
 	err := c.getAndParseL2HTTPResponse("api/v1/orderBookDetails", params, result)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (c *HTTPClient) GetOrderBookOrders(marketId uint8, limit int32) (*OrderBookOrdersResponse, error) {
+	result := &OrderBookOrdersResponse{}
+	params := map[string]any{
+		"market_id": marketId,
+		"limit":     limit,
+	}
+	err := c.getAndParseL2HTTPResponse("api/v1/orderBookOrders", params, result)
 	if err != nil {
 		return nil, err
 	}
@@ -331,7 +397,7 @@ func (c *HTTPClient) GetRecentTrades(marketId uint8, limit *int32) (*RecentTrade
 func (c *HTTPClient) GetTrades(marketId *uint8, accountIndex *int64, startTimestamp, endTimestamp *int64, limit *int32, auth *string) (*TradesResponse, error) {
 	result := &TradesResponse{}
 	params := map[string]any{}
-	
+
 	if marketId != nil {
 		params["market_id"] = *marketId
 	}
@@ -350,7 +416,7 @@ func (c *HTTPClient) GetTrades(marketId *uint8, accountIndex *int64, startTimest
 	if auth != nil {
 		params["auth"] = *auth
 	}
-	
+
 	err := c.getAndParseL2HTTPResponse("api/v1/trades", params, result)
 	if err != nil {
 		return nil, err
@@ -409,6 +475,21 @@ func (c *HTTPClient) GetAccountMetadata(accountIndex int64, auth string) (*Accou
 		"auth":          auth,
 	}
 	err := c.getAndParseL2HTTPResponse("api/v1/accountMetadata", params, result)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (c *HTTPClient) GetL1Metadata(l1Address string, auth *string) (*L1MetadataResponse, error) {
+	result := &L1MetadataResponse{}
+	params := map[string]any{
+		"l1_address": l1Address,
+	}
+	if auth != nil {
+		params["auth"] = *auth
+	}
+	err := c.getAndParseHTTPResponse("api/v1/l1Metadata", params, result, false)
 	if err != nil {
 		return nil, err
 	}
@@ -490,6 +571,21 @@ func (c *HTTPClient) GetPositionFunding(accountIndex int64, marketId *uint8, sta
 	return result, nil
 }
 
+func (c *HTTPClient) GetReferralPoints(accountIndex int64, auth *string) (*ReferralPointsResponse, error) {
+	result := &ReferralPointsResponse{}
+	params := map[string]any{
+		"account_index": accountIndex,
+	}
+	if auth != nil {
+		params["auth"] = *auth
+	}
+	err := c.getAndParseHTTPResponse("api/v1/referral/points", params, result, false)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // GetPublicPools retrieves information about public liquidity pools
 func (c *HTTPClient) GetPublicPools(accountIndex *int64, auth *string) (*PublicPoolsResponse, error) {
 	result := &PublicPoolsResponse{}
@@ -564,6 +660,37 @@ func (c *HTTPClient) GetAccountTxs(accountIndex int64, startTimestamp, endTimest
 	return result, nil
 }
 
+func (c *HTTPClient) GetBlocks(limit int32, index *int64, sort *string) (*BlocksResponse, error) {
+	result := &BlocksResponse{}
+	params := map[string]any{
+		"limit": limit,
+	}
+	if index != nil {
+		params["index"] = *index
+	}
+	if sort != nil {
+		params["sort"] = *sort
+	}
+	err := c.getAndParseL2HTTPResponse("api/v1/blocks", params, result)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (c *HTTPClient) GetBlock(by BlockQueryType, value string) (*BlocksResponse, error) {
+	result := &BlocksResponse{}
+	params := map[string]any{
+		"by":    by,
+		"value": value,
+	}
+	err := c.getAndParseL2HTTPResponse("api/v1/block", params, result)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // GetBlockTxs retrieves all transactions in a specific block
 func (c *HTTPClient) GetBlockTxs(blockHeight int64, limit *int32) (*BlockTxsResponse, error) {
 	result := &BlockTxsResponse{}
@@ -574,6 +701,15 @@ func (c *HTTPClient) GetBlockTxs(blockHeight int64, limit *int32) (*BlockTxsResp
 		params["limit"] = *limit
 	}
 	err := c.getAndParseL2HTTPResponse("api/v1/blockTxs", params, result)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (c *HTTPClient) GetCurrentHeight() (*CurrentHeightResponse, error) {
+	result := &CurrentHeightResponse{}
+	err := c.getAndParseL2HTTPResponse("api/v1/currentHeight", map[string]any{}, result)
 	if err != nil {
 		return nil, err
 	}
@@ -649,12 +785,24 @@ func (c *HTTPClient) GetWithdrawHistory(accountIndex int64, startTimestamp, endT
 	return result, nil
 }
 
+func (c *HTTPClient) GetTxFromL1TxHash(hash string) (*EnrichedTxResponse, error) {
+	result := &EnrichedTxResponse{}
+	params := map[string]any{
+		"hash": hash,
+	}
+	err := c.getAndParseL2HTTPResponse("api/v1/txFromL1TxHash", params, result)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // GetTx retrieves information about a specific transaction by hash
 func (c *HTTPClient) GetTx(txHash string) (*SingleTxResponse, error) {
 	result := &SingleTxResponse{}
 	params := map[string]any{
-		"by":    "hash",   // Required field: specify lookup method
-		"value": txHash,   // Transaction hash value
+		"by":    "hash", // Required field: specify lookup method
+		"value": txHash, // Transaction hash value
 	}
 	err := c.getAndParseL2HTTPResponse("api/v1/tx", params, result)
 	if err != nil {
@@ -667,8 +815,8 @@ func (c *HTTPClient) GetTx(txHash string) (*SingleTxResponse, error) {
 func (c *HTTPClient) GetTxBySequenceIndex(sequenceIndex int64) (*SingleTxResponse, error) {
 	result := &SingleTxResponse{}
 	params := map[string]any{
-		"by":    "sequence_index",                       // Required field: specify lookup method
-		"value": strconv.FormatInt(sequenceIndex, 10),  // Sequence index as string
+		"by":    "sequence_index",                     // Required field: specify lookup method
+		"value": strconv.FormatInt(sequenceIndex, 10), // Sequence index as string
 	}
 	err := c.getAndParseL2HTTPResponse("api/v1/tx", params, result)
 	if err != nil {
@@ -681,7 +829,7 @@ func (c *HTTPClient) GetTxBySequenceIndex(sequenceIndex int64) (*SingleTxRespons
 func (c *HTTPClient) GetTxs(startTimestamp, endTimestamp *int64, limit *int32, txType *int32, accountIndex *int64) (*TxsResponse, error) {
 	result := &TxsResponse{}
 	params := map[string]any{}
-	
+
 	if startTimestamp != nil {
 		params["start_timestamp"] = *startTimestamp
 	}
@@ -697,7 +845,7 @@ func (c *HTTPClient) GetTxs(startTimestamp, endTimestamp *int64, limit *int32, t
 	if accountIndex != nil {
 		params["account_index"] = *accountIndex
 	}
-	
+
 	err := c.getAndParseL2HTTPResponse("api/v1/txs", params, result)
 	if err != nil {
 		return nil, err
@@ -706,6 +854,24 @@ func (c *HTTPClient) GetTxs(startTimestamp, endTimestamp *int64, limit *int32, t
 }
 
 // ============= Phase 4: System Information Methods =============
+
+func (c *HTTPClient) GetAnnouncements() (*AnnouncementsResponse, error) {
+	result := &AnnouncementsResponse{}
+	err := c.getAndParseL2HTTPResponse("api/v1/announcement", map[string]any{}, result)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (c *HTTPClient) GetStatus() (*ServerStatus, error) {
+	result := &ServerStatus{}
+	err := c.getAndParseHTTPResponse("/", map[string]any{}, result, false)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
 
 // GetSystemInfo retrieves general system information
 func (c *HTTPClient) GetSystemInfo() (*SystemInfoResponse, error) {

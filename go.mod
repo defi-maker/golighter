@@ -1,10 +1,11 @@
-module golighter
+module github.com/defi-maker/golighter
 
 go 1.23.0
 
 require (
 	github.com/elliottech/lighter-go v0.0.0-20250909130901-5dfe1fc06ab3
 	github.com/gorilla/websocket v1.5.3
+	github.com/joho/godotenv v1.5.1
 )
 
 require (
