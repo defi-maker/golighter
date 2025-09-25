@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -297,9 +299,8 @@ func (ws *WSClient) handleMessage(data []byte) {
 		return
 	}
 
-	// Debug: Print parsed message type (skip frequent messages)
+	// Only log occasional message types for debugging to avoid flooding output
 	if msg.Type != "update/order_book" && msg.Type != MessageTypePong && msg.Type != MessageTypePing {
-		log.Printf("[WSClient] Received message: %s", string(data))
 		log.Printf("[WSClient] Parsed message type: %s", msg.Type)
 	}
 
@@ -343,8 +344,20 @@ func (ws *WSClient) handleMessage(data []byte) {
 	// Route message to appropriate handlers
 	ws.mu.RLock()
 	handlers := ws.handlers[msg.Type]
+
+	// For orderbook messages, also try MarketID-specific handlers
+	var marketIdHandlers []WSHandler
+	if msg.Type == MessageTypeOrderBookSubscribed || msg.Type == MessageTypeOrderBookUpdate {
+		// Extract MarketID from the message to route to specific handlers
+		marketId := ws.extractMarketIdFromMessage(data)
+		if marketId >= 0 {
+			marketIdKey := fmt.Sprintf("%s_%d", msg.Type, marketId)
+			marketIdHandlers = ws.handlers[marketIdKey]
+		}
+	}
 	ws.mu.RUnlock()
 
+	// Call general handlers first (for backward compatibility)
 	for _, handler := range handlers {
 		func(h WSHandler) {
 			defer func() {
@@ -358,6 +371,44 @@ func (ws *WSClient) handleMessage(data []byte) {
 			}
 		}(handler)
 	}
+
+	// Call MarketID-specific handlers
+	for _, handler := range marketIdHandlers {
+		func(h WSHandler) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[WSClient] MarketID Handler panic: %v", r)
+				}
+			}()
+
+			if err := h(data); err != nil {
+				log.Printf("[WSClient] MarketID Handler error: %v", err)
+			}
+		}(handler)
+	}
+}
+
+// extractMarketIdFromMessage extracts MarketID from orderbook messages
+func (ws *WSClient) extractMarketIdFromMessage(data []byte) int {
+	// Try to parse as orderbook message to extract MarketID
+	var msg struct {
+		Channel string `json:"channel"`
+	}
+
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return -1
+	}
+
+	// Parse MarketID from channel format like "order_book:1"
+	if strings.HasPrefix(msg.Channel, "order_book:") {
+		if parts := strings.Split(msg.Channel, ":"); len(parts) == 2 {
+			if id, err := strconv.Atoi(parts[1]); err == nil {
+				return id
+			}
+		}
+	}
+
+	return -1
 }
 
 func (ws *WSClient) ping(ctx context.Context) {

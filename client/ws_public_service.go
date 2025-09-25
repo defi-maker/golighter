@@ -192,7 +192,10 @@ func (s *LighterWebsocketPublicService) startOrderBookService(
 		return fmt.Errorf("failed to subscribe to channel %s: %w", channel, err)
 	}
 
-	// Add handlers for both snapshot and update messages
+	// Add handlers for both snapshot and update messages with MarketID-specific keys
+	snapshotKey := fmt.Sprintf("%s_%d", MessageTypeOrderBookSubscribed, marketId)
+	updateKey := fmt.Sprintf("%s_%d", MessageTypeOrderBookUpdate, marketId)
+
 	snapshotHandler := func(data []byte) error {
 		return s.handleOrderBookSnapshot(data, marketId, handler)
 	}
@@ -201,15 +204,15 @@ func (s *LighterWebsocketPublicService) startOrderBookService(
 		return s.handleOrderBookUpdate(data, marketId, handler)
 	}
 
-	s.wsClient.AddHandler(MessageTypeOrderBookSubscribed, snapshotHandler)
-	s.wsClient.AddHandler(MessageTypeOrderBookUpdate, updateHandler)
+	s.wsClient.AddHandler(snapshotKey, snapshotHandler)
+	s.wsClient.AddHandler(updateKey, updateHandler)
 
 	// Wait for context cancellation
 	go func() {
 		<-ctx.Done()
-		// Clean up handlers
-		s.wsClient.RemoveHandler(MessageTypeOrderBookSubscribed)
-		s.wsClient.RemoveHandler(MessageTypeOrderBookUpdate)
+		// Clean up handlers with MarketID-specific keys
+		s.wsClient.RemoveHandler(snapshotKey)
+		s.wsClient.RemoveHandler(updateKey)
 		// Unsubscribe
 		s.wsClient.Unsubscribe(channel, "")
 	}()
