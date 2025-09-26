@@ -7,6 +7,7 @@ import (
 
 	"github.com/elliottech/lighter-go/signer"
 	"github.com/elliottech/lighter-go/types"
+	"github.com/elliottech/lighter-go/types/txtypes"
 )
 
 const (
@@ -106,4 +107,16 @@ func (c *TxClient) GetAuthToken(deadline time.Time) (string, error) {
 
 func (c *TxClient) SwitchAPIKey(apiKey uint8) {
 	c.apiKeyIndex = apiKey
+}
+
+func (c *TxClient) GetCancelAllOrdersTransaction(tx *types.CancelAllOrdersTxReq, ops *types.TransactOpts) (*txtypes.L2CancelAllOrdersTxInfo, error) {
+	ops, err := c.FullFillDefaultOps(ops)
+	if err != nil {
+		return nil, err
+	}
+	txInfo, err := types.ConstructL2CancelAllOrdersTx(c.keyManager, c.chainId, tx, ops)
+	if err != nil {
+		return nil, err
+	}
+	return txInfo, nil
 }
