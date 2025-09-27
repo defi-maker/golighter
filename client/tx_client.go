@@ -120,3 +120,15 @@ func (c *TxClient) GetCancelAllOrdersTransaction(tx *types.CancelAllOrdersTxReq,
 	}
 	return txInfo, nil
 }
+
+func (c *TxClient) GetUpdateLeverageTransaction(tx *types.UpdateLeverageTxReq, ops *types.TransactOpts) (*txtypes.L2UpdateLeverageTxInfo, error) {
+	ops, err := c.FullFillDefaultOps(ops)
+	if err != nil {
+		return nil, err
+	}
+	txInfo, err := types.ConstructUpdateLeverageTx(c.keyManager, c.chainId, tx, ops)
+	if err != nil {
+		return nil, err
+	}
+	return txInfo, nil
+}
