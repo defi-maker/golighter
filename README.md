@@ -1,75 +1,104 @@
 # golighter
 
-A thin wrapper library around github.com/elliottech/lighter-go that extracts additional functionality (HTTP endpoints and WebSocket client/services)
+Go client for the [Lighter](https://lighter.xyz/) HTTP API generated from `openapi.json`
+and wrapped with a few ergonomic helpers. The layout mirrors the
+`lighter-python/examples` collection so you can switch between Python and Go
+with minimal friction.
 
-## HTTP 客户端常用接口
+- All REST endpoints from the specification are available through the generated
+  package `github.com/defi-maker/golighter/api`.
+- The `client` package builds on top of the generated code and provides:
+  - sensible defaults for the HTTP transport (configurable via options),
+  - convenience helpers for form-based endpoints such as `sendTx` and
+    `notification/ack`,
+  - `TxClient` utilities that wrap `github.com/elliottech/lighter-go/types`
+    for signing L2 transactions,
+  - WebSocket services (`Public`/`Private`) compatible with the Python SDK.
 
-`client.HTTPClient` 封装了 OpenAPI 中最常用的 REST 接口，涵盖行情、账户、系统信息以及桥接等场景。下面给出初始化和部分接口的调用示例：
+## Quick Start
 
 ```go
 package main
 
 import (
+    "context"
     "log"
 
+    lighterapi "github.com/defi-maker/golighter/api"
     "github.com/defi-maker/golighter/client"
 )
 
 func main() {
-    httpClient := client.NewHTTPClient("https://mainnet.zklighter.elliot.ai")
+    ctx := context.Background()
 
-    status, err := httpClient.GetStatus()
+    c, err := client.New("https://mainnet.zklighter.elliot.ai")
     if err != nil {
-        log.Fatalf("get status failed: %v", err)
+        log.Fatal(err)
     }
-    log.Printf("status=%d network=%d at=%d", status.Status, status.NetworkID, status.Timestamp)
 
-    blocks, err := httpClient.GetBlocks(10, nil, nil)
+    status, err := c.Status(ctx)
     if err != nil {
-        log.Fatalf("get blocks failed: %v", err)
+        log.Fatal(err)
     }
-    log.Printf("latest block commitment=%s", blocks.Blocks[0].Commitment)
+    log.Printf("network=%d status=%d", status.NetworkId, status.Status)
 
-    orders, err := httpClient.GetOrderBookOrders(1, 50)
+    orderBook, err := c.OrderBookOrders(ctx, &lighterapi.OrderBookOrdersParams{MarketId: 1, Limit: 50})
     if err != nil {
-        log.Fatalf("get order book orders failed: %v", err)
+        log.Fatal(err)
     }
-    log.Printf("asks=%d bids=%d", orders.TotalAsks, orders.TotalBids)
-
-    referral, err := httpClient.GetReferralPoints(12345, nil)
-    if err != nil {
-        log.Fatalf("get referral points failed: %v", err)
-    }
-    log.Printf("total points=%d", referral.UserTotalPoints)
+    log.Printf("asks=%d bids=%d", len(orderBook.Asks), len(orderBook.Bids))
 }
 ```
 
-> 若需要从 `.env` 加载认证信息，请使用 `dotenv`（或兼容工具）运行示例，例如：
->
-> ```bash
-> dotenv -f .env -- go run examples/http/main.go
-> ```
+More complete snippets can be found in `examples/` (see
+`examples/README.md` for the mapping to the Python samples).
 
-完整示例代码见 `examples/http/main.go`。
+## Options
 
-### 市场做市示例
-
-- `examples/market_maker/main.go` 复刻了 `LIGHTER_Market_Making/market_maker.py` 的核心逻辑，包括 Avellaneda-Stoikov 报价、动态下单、自动撤单与仓位跟踪。
-- 运行前请准备好 `.env` 文件（私钥、账户/Key 索引、可选的 Avellaneda 参数路径等），然后执行：
-
-```bash
-go run examples/market_maker/main.go
+```go
+client.New(baseURL,
+    client.WithHTTPClient(customHTTP),   // override the underlying http.Client
+    client.WithChannelName("my-channel"),
+    client.WithPriceProtection(false),   // default toggle for sendTx
+)
 ```
 
-- 如需自动加载 `.env`，可以使用 `dotenv -f .env -- go run examples/market_maker/main.go`。
+All operations are available as context-aware methods on `client.Client`. If you prefer to drive the generated code directly, use `Client.API()` to obtain the underlying `lighterapi.ClientWithResponsesInterface`.
 
-### 功能概览
+## Examples
 
-- 系统状态：`GetStatus`、`GetSystemInfo`、`GetSystemStatus`、`GetAnnouncements`。
-- 区块与交易：`GetBlocks`、`GetBlock`（使用 `client.BlockQueryType` 常量）、`GetCurrentHeight`、`GetBlockTxs`、`GetTxFromL1TxHash`。
-- 行情数据：`GetOrderBookOrders` 获取盘口挂单快照。
-- 桥接与资产：`GetFastBridgeInfo`、`GetTransferFeeInfo`、`SendRawTx` / `SendTxBatch`、`GetWithdrawalDelay`。
-- 账户资料：`GetAccount`、`GetAccountByL1Address`、`GetL1Metadata`、`GetAccountLimits`、`GetAccountMetadata`、`AckNotification`（通知确认）。
-- 佣金/积分：`GetReferralPoints` 返回当前账户的积分统计。
+The `examples/` folder mirrors the scenarios covered in
+`../lighter-python/examples`:
 
-大部分接口都接受可选参数（`*string`/`*int64` 等），仅在您传入非 `nil` 时才会包含在查询字符串中。
+| Purpose | Python script | Go command |
+|---------|----------------|------------|
+| Public REST queries | `get_info.py` | `go run examples/get_info` |
+| Create & cancel order | `create_cancel_order.py` | `go run examples/create_cancel_order` |
+| Batch submissions | `send_tx_batch.py` | `go run examples/send_tx_batch` |
+| WebSocket order book | `ws.py` | `go run examples/ws` |
+
+Populate the following environment variables (or an `.env` file) before
+running the samples:
+
+```
+LIGHTER_ENDPOINT=https://mainnet.zklighter.elliot.ai
+LIGHTER_ACCOUNT_INDEX=...
+LIGHTER_API_KEY_INDEX=...
+LIGHTER_API_KEY_PRIVATE_KEY=0x...
+LIGHTER_CHAIN_ID=0
+```
+
+To bootstrap API keys on testnet you can reuse the Python helper
+`system_setup.py`, then feed the produced values into the Go examples.
+
+## Development
+
+The generated sources under `api/` come from `openapi.json` → `openapi3.yaml` (via `swagger2openapi`) → `oapi-codegen`. Re-run the pipeline when the specification changes:
+
+```bash
+npx json5 -c openapi.json -o openapi_fixed.json
+npx swagger2openapi --outfile openapi3.yaml openapi_fixed.json
+$(go env GOBIN)/oapi-codegen -generate types,client -package lighterapi -o api/lighter.gen.go openapi3.yaml
+```
+
+The helper wrappers in `client/generated_wrappers.go` are generated by `scripts/gen_wrappers.py`.

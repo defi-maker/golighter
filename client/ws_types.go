@@ -158,6 +158,22 @@ type WSPriceLevel struct {
 	Size  string `json:"size"`
 }
 
+type PriceLevel struct {
+	Price    string `json:"price"`
+	Quantity string `json:"quantity"`
+}
+
+type AccountMarketStats struct {
+	MarketId       uint8  `json:"market_id"`
+	OpenOrderCount int64  `json:"open_order_count"`
+	Sign           int8   `json:"sign"`
+	Position       string `json:"position"`
+	AvgEntryPrice  string `json:"avg_entry_price"`
+	PositionValue  string `json:"position_value"`
+	UnrealizedPnl  string `json:"unrealized_pnl"`
+	RealizedPnl    string `json:"realized_pnl"`
+}
+
 // WebSocket order book state for incremental updates
 type WSOrderBookState struct {
 	MarketId  uint8             `json:"market_id"`
